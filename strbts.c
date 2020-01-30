@@ -1,55 +1,170 @@
-/* NOTE: Not finished and not working version.
-Posted here just for portfolio. Will update in
-like a week or some shit                    */
+/*********************************************************************
+*                                                                    *
+* SYNOPSIS:                                                          *
+*     byte* strbits(struct MFsdef *s, size_t nbits)                  *
+*                                                                    *
+* DESCRIPTION:                                                       *
+*    The purpose of this function is to pull an arbitrary amount     *
+*     of bits from a byte array at a specified index, increment      *
+*     the index and return the value of the bits through other       *
+*     functions, such as:                                            *
+*     readbitsi() - readbits and return a signed integer.            *
+*     readbitsf() - readbits and return a floating-point number.     *
+*     readbytes() - align to byte-boundary and read characters.      *
+*                                                                    *
+*********************************************************************/
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 
-long strbts(byte *barr, ui32 len, int *pos){
-   
-   ui32 bits[50];
-   int bt, ofs, ido, i, skp;
-   long ret;
-   int bb = BITSPERBYTE;
-   
-   if (len > sizeof(bits)/sizeof(ui32)){
-      printf("Not enough space for 'bit' buffer."); /* replace w/ bits[] reallocation */      
-      return -1;
-   }
-   for (i=0;i<len;i++){
+#include "sysdef.h"
+#include "rfdef.h"
+#include "readmf.h"
 
-      bt = *pos/bb;                       /* determine byte to read  */
-      if ((len-(bb*bt)) <= bb)            /* bits need to be packed  */
-         ofs = ((bb*bt)+len-1)-i;
-      else                                /* bits fit into one byte  */
-         ofs = ((bb*(bt+1)-1)-i+(bt*bb));
+/*=====================================================================*
+*                             readbits()                               *
+*  Read arbitrary amount of bits from the metafile.                    *
+*=====================================================================*/
+
+byte* readbits(MFS *mfs, size_t nbits) {
       
-      ido = (len > ((bt+1)*bb)) ? 0 :     /* Determine shift amount  */ 
-      bb*(bt+1)-len;     
+   int ofs, sft;       /* Bit-flip offset, bit-shift offset */
+   int br, br0, blft;
+   int bt;
+   int i;
+   int rbo  = 0;
+   int bl   = 0;
+   int j    = 0;
+   int k    = 0;
+
+   ui16 bb = BITSPERBYTE; /* Intermediate for b/B constant */   
+
+   int* bits = malloc(nbits*sizeof(int));
+   byte *bitstrm = malloc((nbits/bb)*sizeof(byte));
+
+   /* Determine the bit remainder */
+   br = br0 = (mfs->bytesread*bb)-mfs->bitpos;
+   if (br != 0) br = br0 = bb-br;
+   
+   bl = bb-br;
+   blft = nbits;
+
+   for (i=0;i<nbits;i++) {
       
-      bits[ofs] = (barr[bt] >>            /* Place bits with offset  */
-      ((*pos-bt*bb)+ido)) & 1;
-      (*pos)++;
+      /* Determine byte to read  */
+      bt = mfs->bitpos/bb;
 
-      if (bits[i] == 1)
-         ret += pow(2, len-ofs);          /* Add to return value     */
-
-   }
-
-   /* Print bytes with spacing */
-#if DUMP_STRBITS
-   skp = 0;
-   for (i=0;i<len;i++){
-      if (skp == bb){
-         printf("   ");
-         skp = 1;
+      /* Handle reading next byte */
+      if (bt >= mfs->bytesread) {
+         if(!rfread(mfs->rfptr,&mfs->currbyte,1,ABORT)) {
+            /* End of file */
+            mfs->eof = END_OF_FILE;
+            return;
+         }
+         mfs->bytesread++;
+         if(i>0) rbo++;  /* Ensure 'rbo' is 0 on first pass */         
+         br = 0, j = 0;
+         k  = i;
+         blft = nbits-i;
+         bl = bb-br;
       }
-      else skp++;      
-      printf("%d", bits[i]);
-   }
-#endif
 
-   /* Convert value to character string */
+      /* Current byte can hold all remaining bits */
+      if (blft < bl) {
+         ofs = (k-1)+blft-j;
+         sft = bl-blft+j;
+      }
+      /* Current byte has extra bits */
+      else {
+         ofs = (rbo+1)*bb-(br0+j)-1;
+         sft = j;
+      }
+            
+      bits[ofs] = (mfs->currbyte >> sft) & 1;  /* place bits */
+      br++;j++;
+      mfs->bitpos++;
+
+   }
+
+   /* store bits into bitstrm pointer */
+   for (i=0;i<nbits;i++) {
+      bt = nbits/bb; /* index of current byte */
+      bitstrm[i] = (bitstrm[i] & 1<<bb-(bb*(i/bb)));
+   }
+
+   return bitstrm;
+
+} /* End of readbits */
+
+/*---------------------------------------------------------------------*
+*              !!!BELOW either is or to be DEPRACATED!!!               *
+*---------------------------------------------------------------------*/
+
+/*=====================================================================*
+*                            readbitsi()                               *
+*  Read bits and return value as an integer.                           *
+*=====================================================================*/
+
+int readbitsi(MFS *mfs, size_t nbits) {
+   
+   int *bits;   /* Pointer to bit array  */
+   int i   = 0;
+   int ret = 0;
+   bits = malloc(nbits*sizeof(int));
+   // define GRAB_BITS?
+   readbits(mfs,nbits,bits);
+   /* Get numeric value of bits[] */
+   for (i=0; i<nbits; i++) {
+      if (bits[i]==1)
+         // NEW SHIFTING HERE //
+         ret += pow(2, nbits-i-1);
+   }
+   free(bits);
+   return ret;
+} /* end of readbitsi */
+
+/*=====================================================================*
+*                            readbitsf()                               *
+*  Read bits and return value as a float.                              *
+*=====================================================================*/
+
+float readbitsf(MFS *mfs, size_t nbits) {
+
+   int *bits;   /* Pointer to bit array  */
+   int i = 0;
+   float ret = 0;
+   bits = malloc(nbits*sizeof(int));
+   readbits(mfs,nbits,bits);
+   /* Get numeric value of bits[] */
+   for (i=0; i<nbits; i++) {
+      if (bits[i]==1)
+         ret += pow(2, (nbits-i-1)*-1);
+   }
+   free(bits);
+   return ret;
+}
+
+/*=====================================================================*
+*                            readbytes()                               *
+*  Algign to byte-boundary and read a character string from metafile.  *
+*=====================================================================*/
+
+char* readbytes(MFS *mfs, size_t nbytes) {
+
+   char *ret = malloc(sizeof(byte)*nbytes);
+
+   /* Check for alignment */
+   if ((mfs->bitpos/mfs->bytesread) > 0) {
+      rfseek(mfs->rfptr,1,SEEK_CUR,ABORT);
+      mfs->bytesread++;
+   }
+
+   if (rfread(mfs->rfptr,ret,nbytes,ABORT)) {
+      /* Alignment for next read */
+      mfs->bytesread += nbytes;
+      mfs->bitpos = mfs->bytesread*BITSPERBYTE;
+   }
 
    return ret;
 }
